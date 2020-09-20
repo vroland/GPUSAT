@@ -29,7 +29,7 @@ namespace gpusat {
         std::vector<cl_long> variables;
         std::vector<bagType *> edges;
         cl_long bags = 0;
-        treeType *solution;
+        treeType *solution = NULL;
         cl_long maxSize = 0;
     };
 

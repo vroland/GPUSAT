@@ -58,6 +58,7 @@ void buildKernel(cl::Context &context, std::vector<cl::Device> &devices, cl::Com
             memorySize = devices[0].getInfo<CL_DEVICE_GLOBAL_MEM_SIZE>();
             maxMemoryBuffer = devices[0].getInfo<CL_DEVICE_MAX_MEM_ALLOC_SIZE>();
             if (combineWidth < 0) {
+		std::cerr << "maximum workgroup size: " << devices[0].getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>() << " " << devices[0].getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>() << std::endl;
                 combineWidth = (long) std::floor(std::log2(devices[0].getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>() * devices[0].getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>()));
             }
             break;
@@ -81,7 +82,7 @@ int main(int argc, char *argv[]) {
     std::string type;
     std::string decompDir;
     long combineWidth = -1;
-    time_t seed = time(0);
+    time_t seed = 2;
     bool cpu, weighted, noExp, nvidia, amd;
     dataStructure solutionType = dataStructure::TREE;
     CLI::App app{};
@@ -214,7 +215,9 @@ int main(int argc, char *argv[]) {
     try {
         buildKernel(context, devices, queue, program, memorySize, maxMemoryBuffer, nvidia, amd, cpu, combineWidth);
         // combine small bags
+        std::cerr << "before pp: " << bagTypeHash(&treeDecomp.bags[0], solutionType) << std::endl;
         Preprocessor::preprocessDecomp(&treeDecomp.bags[0], combineWidth);
+        std::cerr << "after pp: " << bagTypeHash(&treeDecomp.bags[0], solutionType) << std::endl;
 
         std::cout.flush();
 

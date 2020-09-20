@@ -8,6 +8,8 @@
 #include <types.h>
 
 namespace gpusat {
+
+    size_t bagTypeHash(bagType*, dataStructure ds);
     /**
      *
      */
