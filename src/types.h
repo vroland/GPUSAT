@@ -115,10 +115,8 @@ namespace gpusat {
     class ArraySolution {
         public:
             ArraySolution(size_t size_, int64_t minId, int64_t maxId) :
-                size(size_), minId_(minId), maxId_(maxId), numSolutions(0)
-            {
-                elements = nullptr;
-            }
+                size(size_), minId_(minId), maxId_(maxId),
+                elements(nullptr), satisfiable(false) {}
 
 
             /**
@@ -129,7 +127,7 @@ namespace gpusat {
                 size = other.dataStructureSize();
                 minId_ = other.minId();
                 maxId_ = other.maxId();
-                numSolutions = other.solutions();
+                satisfiable = other.isSatisfiable();
                 // FIXME: this type is technically wrong, but works
                 // because no destructors are called on the GPU
                 elements = SolutionDataPtr<double, M>(gpu_data);
@@ -168,6 +166,14 @@ namespace gpusat {
                 return size;
             }
 
+            GPU_HOST_ATTR bool isSatisfiable() const {
+                return satisfiable;
+            }
+
+            GPU_HOST_ATTR void setSatisfiability(bool value) {
+                satisfiable = value;
+            }
+
             void setDataStructureSize(size_t new_size) {
                 size = new_size;
             }
@@ -192,7 +198,7 @@ namespace gpusat {
                 size_t h = dataStructureSize();
                 hash_combine(h, minId());
                 hash_combine(h, maxId());
-                hash_combine(h, solutions());
+                hash_combine(h, isSatisfiable());
                 if (!hasData()) {
                     return h;
                 }
@@ -204,34 +210,6 @@ namespace gpusat {
 
             GPU_HOST_ATTR double solutionCountFor(int64_t id) const {
                 return data()[id - minId_];
-            }
-
-            /**
-             * increase the solution counter by one.
-             */
-            __device__ void incSolutions()  {
-#if defined(__CUDACC__)
-                atomicAdd(&(numSolutions), 1);
-#else
-                fprintf(stderr, "this may not be called from CPU (yet)!");
-                assert(false);
-#endif
-            }
-
-            __device__ void decSolutions()  {
-#if defined(__CUDACC__)
-                atomicSub(&(numSolutions), 1);
-#else
-                fprintf(stderr, "this may not be called from CPU (yet)!");
-                assert(false);
-#endif
-            }
-
-            /**
-             * Number of solutions in this container.
-             */
-            uint64_t solutions() const {
-                return numSolutions;
             }
 
             __device__ void setCount(int64_t id, double val) {
@@ -251,7 +229,7 @@ namespace gpusat {
             uint64_t minId_;
             uint64_t maxId_;
             SolutionDataPtr<double, M> elements;
-            uint64_t numSolutions;
+            bool satisfiable;
     };
 
     template <typename M>
@@ -260,7 +238,7 @@ namespace gpusat {
             TreeSolution(size_t size_, int64_t minId, int64_t maxId, int64_t variableCount_) :
                 size(size_), minId_(minId), maxId_(maxId),
                 variableCount(variableCount_),
-                tree(nullptr), treeSize(0) {};
+                tree(nullptr), treeSize(0), satisfiable(false) {};
 
             template<typename M2>
             TreeSolution(const TreeSolution<M2>& other, TreeNode* gpu_data) {
@@ -269,6 +247,7 @@ namespace gpusat {
                 maxId_ = other.maxId();
                 treeSize = other.currentTreeSize();
                 variableCount = other.variables();
+                satisfiable = other.isSatisfiable();
                 tree = SolutionDataPtr<TreeNode, M>(gpu_data);
             }
 
@@ -322,6 +301,14 @@ namespace gpusat {
                 size = new_size;
             }
 
+            GPU_HOST_ATTR bool isSatisfiable() const {
+                return satisfiable;
+            }
+
+            GPU_HOST_ATTR void setSatisfiability(bool value) {
+                satisfiable = value;
+            }
+
             constexpr size_t elementSize() const {
                 return sizeof(TreeNode);
             }
@@ -338,6 +325,10 @@ namespace gpusat {
                 return variableCount;
             }
 
+            /**
+             * Returns the solution count for a given id.
+             * Returns -1.0 if there is no entry for this id.
+             */
             GPU_HOST_ATTR double solutionCountFor(int64_t id) const {
                 ulong nextId = 0;
                 for (ulong i = 0; i < variables(); i++) {
@@ -368,9 +359,8 @@ namespace gpusat {
 
                 ulong nextId = 0;
                 ulong val = 0;
-                // FIXME: this should report satisfiability instead
                 if (variables() == 0) {
-                    atomicAdd(&treeSize, 1);
+                    setSatisfiability(true);
                 }
                 for (ulong i = 0; i < variables(); i++) {
                     // lower or upper 32bit, depending on if bit of variable i is set in id
@@ -395,11 +385,7 @@ namespace gpusat {
                 size_t h = 0;
                 hash_combine(h, minId());
                 hash_combine(h, maxId());
-                // FIXME:
-                // on nodes with 0 variables, this treeSize indicates satisfiability.
-                // otherwise, it is the index of the last node.
-                // This mismatch should be solved.
-                hash_combine(h, currentTreeSize() - (variables() == 0));
+                hash_combine(h, isSatisfiable());
                 if (!hasData()) {
                     return h;
                 }
@@ -442,6 +428,7 @@ namespace gpusat {
             SolutionDataPtr<TreeNode, M> tree;
             size_t treeSize;
             size_t variableCount;
+            bool satisfiable;
     };
 
     /**
@@ -513,6 +500,10 @@ namespace gpusat {
 
     inline bool hasData(SolutionVariant& solution) {
         return std::visit([](auto& sol) { return sol.hasData(); }, solution);
+    }
+
+    inline bool isSatisfiable(SolutionVariant& solution) {
+        return std::visit([](auto& sol) { return sol.isSatisfiable(); }, solution);
     }
 
     struct GPUVars {
