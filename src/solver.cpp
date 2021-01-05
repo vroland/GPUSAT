@@ -9,7 +9,7 @@
 #include <cuda_runtime.h>
 #include <signal.h>
 #include <optional>
-
+#include <bitset>
 
 #include "kernel.h"
 #include "solver.h"
@@ -32,13 +32,14 @@ namespace gpusat {
         }
         */
         for (const auto& sol : solution) {
-            hash_combine(h, std::visit([](const auto& s) -> size_t {return s.hash(); }, sol));
+            hash_combine(h, std::visit([&](const auto& s) -> size_t {return s.hash(masks); }, sol));
         }
         if (cached_solution.has_value()) {
             const auto sol = cpuCopy(cached_solution.value());
-            hash_combine(h, std::visit([](const auto& s) -> size_t {return s.hash(); }, sol));
+            hash_combine(h, std::visit([&](const auto& s) -> size_t {return s.hash(masks); }, sol));
         }
-        hash_combine(h, maxSize);
+        //hash_combine(h, maxSize);
+        std::cout << "maxSize: " << maxSize << std::endl;
         return h;
     }
     template <typename T>
@@ -222,7 +223,7 @@ namespace gpusat {
         }
     }
 
-    TreeSolution<CudaMem> Solver::combineTree(TreeSolution<CudaMem> &t1, TreeSolution<CudaMem> &t2) {
+    TreeSolution<CudaMem> Solver::combineTree(TreeSolution<CudaMem> &t1, TreeSolution<CudaMem> &t2, BagMasks masks) {
 
         // must have the same ID space
         assert(t1.variables() == t2.variables());
@@ -235,7 +236,7 @@ namespace gpusat {
 
             assert(t1.dataStructureSize() >= t1.currentTreeSize() + t2.currentTreeSize() + 1);
 
-            auto result = combineTreeWrapper(t1, t2);
+            auto result = combineTreeWrapper(t1, t2, masks);
             t1.freeData();
             t2.freeData();
 
@@ -306,6 +307,9 @@ namespace gpusat {
         uint64_t maxSize = std::ceil((1l << (node.variables.size())) * 1.0 / bagSizeNode);
 
         node.solution.clear();
+
+        node.masks.introduced_always_pos = 0; //edge1.masks.introduced_always_pos & edge2.masks.introduced_always_pos;
+        node.masks.introduced_always_neg = 0; //edge1.masks.introduced_always_neg & edge2.masks.introduced_always_neg;
 
         CudaSolutionVariant solution_gpu(ArraySolution<CudaMem>(0, 0, 0));
         // track wether we can leave the last solution bag on the gpu.
@@ -391,6 +395,9 @@ namespace gpusat {
                         .count = edge2.variables.size(),
                         .vars = buf_solVars2.data()
                     },
+                    node.masks,
+                    edge1.masks,
+                    edge2.masks,
                     buf_weights.data(),
                     pow(2, edge1.exponent + edge2.exponent),
                     buf_exponent.data(),
@@ -429,7 +436,7 @@ namespace gpusat {
                     if (last != NULL && last->hasData() && (sol.currentTreeSize() + last->currentTreeSize() + 1) < sol.dataStructureSize()) {
                         TRACE("%s", "first branch");
                         auto gpu_last = gpuOwner(*last);
-                        auto new_tree_gpu = combineTree(sol, gpu_last);
+                        auto new_tree_gpu = combineTree(sol, gpu_last, node.masks);
                         new_tree_gpu.setDataStructureSize(new_tree_gpu.currentTreeSize());
                         solution_gpu = std::move(new_tree_gpu);
                         node.solution.pop_back();
@@ -492,15 +499,21 @@ namespace gpusat {
 
         TRACE("\n\tpnode: %lu \n\tnode: %lu \n\tcnode: %lu", pnode.hash(), node.hash(), cnode.hash());
 
+        // pnode: Parent node
+        // cnode: Child node, previously solved
         isSat = 0;
+        // fVars: non-forgotten variables, Vars present in parent node and current node
         std::vector<int64_t> fVars;
         std::set_intersection(
                 node.variables.begin(), node.variables.end(),
                 pnode.variables.begin(), pnode.variables.end(),
         std::back_inserter(fVars));
+        // variables of current node
         std::vector<int64_t> iVars = node.variables;
+        // variables of child node
         std::vector<int64_t> eVars = cnode.variables;
 
+        // retain only non-forgotten variables
         node.variables = fVars;
 
         this->numIntroduceForget++;
@@ -508,6 +521,9 @@ namespace gpusat {
         // get clauses which only contain iVars
         std::vector<uint64_t> clauses;
         int64_t numClauses = 0;
+
+        uint64_t occurred_negated = 0;
+        uint64_t occurred_positive = 0;
 
         for (size_t i = 0; i < formula.clause_offsets.size(); i++) {
             size_t clause_offset = formula.clause_offsets[i];
@@ -525,6 +541,13 @@ namespace gpusat {
             );
 
             if (applies) {
+                // only track exclusive occurence for retained vars
+                for (size_t v = 0; v < fVars.size(); v++) {
+                    bool pos = std::find(clause_begin, clause_end, fVars[v]) != clause_end;
+                    bool neg = std::find(clause_begin, clause_end, -fVars[v]) != clause_end;
+                    occurred_negated |= (((uint64_t)neg) << v);
+                    occurred_positive |= (((uint64_t)pos) << v);
+                }
                 numClauses++;
                 uint64_t c_vars = 0;
                 uint64_t c_signs = 0;
@@ -547,10 +570,45 @@ namespace gpusat {
                     variable_index++;
                 }
                 assert(lit_iter == lit_end);
+                //occurred_negated |= c_signs;
+                //occurred_positive |= c_vars & (~(c_signs));
+                //std::cout << "vars:  " << std::bitset<64>(c_vars) << std::endl;
+                //std::cout << "signs: " << std::bitset<64>(c_signs) << std::endl;
                 clauses.push_back(c_vars);
                 clauses.push_back(c_signs);
             }
         }
+
+        uint64_t always_pos = occurred_positive & (~occurred_negated);
+        uint64_t always_neg = occurred_negated & (~occurred_positive);
+        if (always_pos > 0 && always_neg > 0) {
+            assert((always_pos & always_neg) == 0);
+        }
+        uint64_t mask = 0;
+        for (size_t i = 0; i < fVars.size(); i++) {
+            // variable must not occur in child variables
+            // FIXME: child only stores fVars
+            if (std::find(eVars.begin(), eVars.end(), fVars[i]) != eVars.end()) {
+                always_neg &= ~(1ul << i);
+                always_pos &= ~(1ul << i);
+            }
+        }
+
+        if (iVars.size() > 1) {
+            // In C++2020, use std::popcount for this.
+            int node_size_correction = __builtin_popcountll(always_neg) + __builtin_popcountll(always_pos);
+            //
+            std::cout << node.id << " overall: " << node_size_correction << " of " << iVars.size() << " fVars: " << fVars.size() << std::endl;
+            std::cout << "always pos: " << std::bitset<64>(always_pos) << std::endl;
+            std::cout << "always neg: " << std::bitset<64>(always_neg) << std::endl;
+        }
+
+        node.masks.introduced_always_pos = always_pos;
+        node.masks.introduced_always_neg = always_neg;
+        if ((always_pos || always_neg) && cnode.solution.size() > 0) {
+            std::cout << "CHILD size: " << cnode.id << " " << cnode.maxSize << std::endl;
+        }
+
         //std::cout << node.id << " clauses: " << numClauses << std::endl;
 
         node.exponent = INT32_MIN;
@@ -565,27 +623,30 @@ namespace gpusat {
         uint64_t bagSizeForget = 1;
         uint64_t s = sizeof(int64_t);
 
+        size_t node_size = node.variables.size();
+
         if (maxBag > 0) {
-            bagSizeForget = 1ul << (uint64_t) std::min(node.variables.size(), maxBag);
+            bagSizeForget = 1ul << (uint64_t) std::min(node_size, maxBag);
         } else {
             if (solutionType == TREE) {
+                //node_size -= node_size_correction;
                 if (nextNode == JOIN) {
                     bagSizeForget = qmin(
-                        maxMemoryBuffer / s / 2 - 3 * node.variables.size() * sizeof(int64_t),
+                        maxMemoryBuffer / s / 2 - 3 * node_size * sizeof(int64_t),
                         (memorySize - usedMemory - cnode.maxSize * s) / s / 2,
                         (memorySize - usedMemory) / 2 / 3 / s,
-                        1ul << node.variables.size()
+                        1ul << node_size
                     );
                 } else if (nextNode == INTRODUCEFORGET) {
                     bagSizeForget = qmin(
-                        maxMemoryBuffer / s / 2 - 3 * node.variables.size() * sizeof(int64_t),
+                        maxMemoryBuffer / s / 2 - 3 * node_size * sizeof(int64_t),
                         (memorySize - usedMemory - cnode.maxSize * s) / s / 2,
                         (memorySize - usedMemory) / 2 / 2 / s,
-                        1ul << node.variables.size()
+                        1ul << node_size
                     );
                 }
             } else if (solutionType == ARRAY) {
-                bagSizeForget = 1ul << (int64_t) std::min(node.variables.size(), (size_t) std::min(log2(maxMemoryBuffer / sizeof(int64_t)), log2(memorySize / sizeof(int64_t) / 3)));
+                bagSizeForget = 1ul << (int64_t) std::min(node_size, (size_t) std::min(log2(maxMemoryBuffer / sizeof(int64_t)), log2(memorySize / sizeof(int64_t) / 3)));
             }
         }
 
@@ -635,6 +696,9 @@ namespace gpusat {
                     assert(hasData(csol));
                     edge_solution = gpuOwner(csol);
                 }
+                if (edge_solution.has_value()) {
+                    TRACE("CHILD size: %ld %ld", maxId(edge_solution.value()), minId(edge_solution.value()));
+                }
 
                 // FIXME: offset onto global id
                 introduceForgetWrapper(
@@ -654,6 +718,8 @@ namespace gpusat {
                     },
                     buf_clauses.data(),
                     numClauses,
+                    node.masks,
+                    cnode.masks,
                     buf_weights.data(),
                     buf_exponent.data(),
                     pow(2, cnode.exponent),
@@ -690,7 +756,7 @@ namespace gpusat {
                     if (last != NULL && last->hasData()
                         && (sol.currentTreeSize() + last->currentTreeSize() + 1) < sol.dataStructureSize()) {
                         auto gpu_last = gpuOwner(*last);
-                        auto new_tree_gpu = combineTree(sol, gpu_last);
+                        auto new_tree_gpu = combineTree(sol, gpu_last, node.masks);
                         new_tree_gpu.setDataStructureSize(new_tree_gpu.currentTreeSize());
                         solution_gpu = std::move(new_tree_gpu);
                         node.solution.pop_back();
@@ -729,6 +795,20 @@ namespace gpusat {
         for (const auto &sol : node.solution) {
             tableSize += dataStructureSize(sol);
         }
+
+        bool found = false;
+        if (node.solution.size() == 0 && node.masks.introduced_always_neg > 0) {
+            auto cpu = std::get<TreeSolution<CpuMem>>(cpuCopy(solution_gpu));
+            for (uint64_t i=cpu.minId(); i < cpu.maxId(); i++) {
+                auto sa = cpu.solutionCountFor(i, node.masks);
+                auto sb = cpu.solutionCountRaw(i);
+                if (sa != sb) {
+                    //std::cout << "different: " << sa << " " << sb << " " << i << std::endl;
+                    //found = true;
+                }
+            }
+        }
+        if (found) exit(1);
 
         // if only one solution bag was used, reuse
         // it in the next node

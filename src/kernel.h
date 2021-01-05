@@ -8,7 +8,8 @@
 namespace gpusat {
     TreeSolution<CudaMem> combineTreeWrapper(
         TreeSolution<CudaMem>& to_owner,
-        const TreeSolution<CudaMem>& from_owner
+        const TreeSolution<CudaMem>& from_owner,
+        BagMasks masks
     );
 
     void solveJoinWrapper(
@@ -18,6 +19,9 @@ namespace gpusat {
         GPUVars variables,
         GPUVars edgeVariables1,
         GPUVars edgeVariables2,
+        BagMasks masks,
+        BagMasks e1_masks,
+        BagMasks e2_masks,
         double *weights,
         double value,
         int32_t *exponent,
@@ -33,6 +37,8 @@ namespace gpusat {
         // FIXME: Move this static information to GPU once.
         uint64_t *clauses,
         long numclauses,
+        BagMasks masks,
+        BagMasks edge_masks,
         double *weights,
         int32_t *exponent,
         double value,

@@ -73,6 +73,11 @@ namespace gpusat {
 
     static_assert(sizeof(TreeNode) == sizeof(uint64_t));
 
+    struct BagMasks {
+        uint64_t introduced_always_pos = 0;
+        uint64_t introduced_always_neg = 0;
+    };
+
     /**
      * CUDA-Compatible RAII manager for solution bags,
      * similar to unique_ptr.
@@ -209,7 +214,7 @@ namespace gpusat {
                 return -1.0;
             }
 
-            size_t hash() const {
+            size_t hash(BagMasks masks) const {
                 size_t h = dataStructureSize();
                 hash_combine(h, minId());
                 hash_combine(h, maxId());
@@ -221,7 +226,7 @@ namespace gpusat {
                 for (size_t i=0; i < dataStructureSize(); i++) {
                     // regard empty entries as 0.0, for compatibility
                     // with original implementation
-                    reinterpreter.content = std::max(0.0, data()[i]);
+                    reinterpreter.content = std::max(0.0, solutionCountFor(i, masks));
                     hash_combine(h, reinterpreter.empty);
                 }
                 return h;
@@ -232,8 +237,18 @@ namespace gpusat {
              * Returns -1.0 if there is no entry for this id.
              * (if initialized correctly)
              */
-            GPU_HOST_ATTR double solutionCountFor(int64_t id) const {
+            GPU_HOST_ATTR double solutionCountRaw(int64_t id) const {
                 return data()[id - minId_];
+            }
+
+
+            GPU_HOST_ATTR double solutionCountFor(int64_t id, BagMasks masks) const {
+                uint64_t id_class = (abs(id) & ~(masks.introduced_always_neg));
+                double sols = solutionCountRaw(id);
+                if (sols < 0) {
+                    return solutionCountRaw(id_class);
+                }
+                return sols;
             }
 
             __device__ void setCount(int64_t id, double val) {
@@ -345,11 +360,21 @@ namespace gpusat {
                 return variableCount;
             }
 
+
+            GPU_HOST_ATTR double solutionCountFor(int64_t id, BagMasks masks) const {
+                uint64_t id_class = (abs(id) & ~(masks.introduced_always_neg));
+                double sols = solutionCountRaw(id);
+                if (sols < 0) {
+                    return solutionCountRaw(id_class);
+                }
+                return sols;
+            }
+
             /**
              * Returns the solution count for a given id.
              * Returns -1.0 if there is no entry for this id.
              */
-            GPU_HOST_ATTR double solutionCountFor(int64_t id) const {
+            GPU_HOST_ATTR double solutionCountRaw(int64_t id) const {
                 ulong nextId = 0;
                 for (ulong i = 0; i < variables(); i++) {
                     nextId = ((uint32_t *) &(data()[nextId]))[(id >> (variables() - i - 1)) & 1];
@@ -403,7 +428,7 @@ namespace gpusat {
             }
 
 
-            size_t hash() const {
+            size_t hash(BagMasks masks) const {
                 size_t h = 0;
                 hash_combine(h, minId());
                 hash_combine(h, maxId());
@@ -413,7 +438,9 @@ namespace gpusat {
                 if (!hasData()) {
                     return h;
                 }
-                hash_combine(h, hashSubtree(data()[0], variables()));
+                for (int64_t id=minId_; id < maxId_; id++) {
+                    hash_combine(h, solutionCountFor(id, masks));
+                }
                 return h;
             }
 
@@ -609,6 +636,7 @@ namespace gpusat {
         int64_t correction = 0;
         int32_t exponent = 0;
         int64_t id = 0;
+        BagMasks masks;
         std::vector<int64_t> variables;
         std::vector<BagType> edges;
         std::vector<SolutionVariant> solution;

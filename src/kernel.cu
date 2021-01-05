@@ -39,14 +39,15 @@ __device__ int64_t get_global_id(uint64_t minId, uint64_t maxId) {
  */
 __global__ void combineTree(
         TreeSolution<GpuOnly>* to,
-        const TreeSolution<GpuOnly>* from
+        const TreeSolution<GpuOnly>* from,
+        BagMasks masks
 ) {
     // this is is relative to the <from>-tree
     int64_t id = get_global_id(from->minId(), from->maxId());
     if (id < 0) {
         return;
     }
-    double val = from->solutionCountFor(id);
+    double val = from->solutionCountFor(id, masks);
     if (val > 0) {
         to->setCount(id, val);
     }
@@ -54,6 +55,7 @@ __global__ void combineTree(
 
 /**
  * Operation to solve a Introduce node in the decomposition.
+ * Obtain solution count in the child solution set.
  *
  * @param variables
  *      the ids of the variables in the current bag
@@ -77,6 +79,7 @@ __device__ double solveIntroduce_(
         GPUVars variables,
         const T& edge,
         GPUVars edgeVariables,
+        BagMasks edge_masks,
         double *weights,
         int64_t id
 ) {
@@ -92,6 +95,18 @@ __device__ double solveIntroduce_(
         a++;
     };
 
+    uint64_t abs_id = abs(otherId);
+    uint64_t id_class = (abs_id | edge_masks.introduced_always_neg);
+    //if ((edge_masks.introduced_always_neg > 0) && (id_class != abs_id)) {
+        if (id_class <= edge.maxId()) {
+            //otherId = id_class;
+        }
+        /*if (tmp > 0) {
+            printf("result %f class: %ld, other: %ld\n", tmp, id_class, otherId);
+        }
+        */
+    //}
+
     //weighted model count
     if (weights != 0) {
         for (b = 0, a = 0; a < variables.count; a++) {
@@ -105,7 +120,7 @@ __device__ double solveIntroduce_(
     }
 
     if (edge.hasData() && otherId >= edge.minId() && otherId < edge.maxId()) {
-        return max(edge.solutionCountFor(otherId) * weight, 0.0); 
+        return max(edge.solutionCountFor(otherId, edge_masks) * weight, 0.0); 
     } else if (!edge.hasData() && otherId >= edge.minId() && otherId < edge.maxId()) {
         return 0.0;
     } else {
@@ -191,6 +206,9 @@ __global__ void solveJoin(
         //int64_t startIDNode,
         //int64_t startIDEdge1,
         //int64_t startIDEdge2,
+        BagMasks masks,
+        BagMasks e1_masks,
+        BagMasks e2_masks,
         double *weights,
         //uint64_t *sols,
         double value,
@@ -207,10 +225,10 @@ __global__ void solveJoin(
     double weight = 1.0;
 
     if (edge1 != nullptr) {
-        edge1_solutions = solveIntroduce_(variables, *edge1, edgeVariables1, weights, id);
+        edge1_solutions = solveIntroduce_(variables, *edge1, edgeVariables1, e1_masks, weights, id);
     }
     if (edge2 != nullptr) {
-        edge2_solutions = solveIntroduce_(variables, *edge2, edgeVariables2, weights, id);
+        edge2_solutions = solveIntroduce_(variables, *edge2, edgeVariables2, e2_masks, weights, id);
     }
 
     // weighted model count
@@ -244,7 +262,7 @@ __global__ void solveJoin(
     // we need to consider individual edges and maybe look
     // at we have already stored for the current id.
     } else if (edge1_solutions >= 0.0 || edge2_solutions >= 0.0) {
-        double oldVal = solution->solutionCountFor(id); 
+        double oldVal = solution->solutionCountFor(id, masks); 
 
         // if the solution was not present before, multiply with one.
         if (oldVal < 0.0) {
@@ -317,13 +335,14 @@ __device__ double solveIntroduceF(
         GPUVars variables,
         const T* edge,
         GPUVars edgeVariables,
+        BagMasks edge_masks,
         double *weights,
         long id
 ) {
     double tmp;
     if (edge != nullptr && edge->hasData()) {
         // get solutions count edge
-        tmp = solveIntroduce_(variables, *edge, edgeVariables, weights, id);
+        tmp = solveIntroduce_(variables, *edge, edgeVariables, edge_masks, weights, id);
     } else {
         // no edge - solve leaf
         tmp = 1.0;
@@ -392,6 +411,8 @@ __global__ void solveIntroduceForget(
         GPUVars varsIntroduce,
         uint64_t *clauses,
         long numclauses,
+        BagMasks masks,
+        BagMasks edge_masks,
         double *weights,
         int32_t *exponent,
         double value,
@@ -401,11 +422,11 @@ __global__ void solveIntroduceForget(
     if (id < 0) {
         return;
     }
-
     if (varsIntroduce.count != varsForget.count) {
         double tmp = 0;
         long templateId = 0;
-        // generate templateId
+        // IDs are in space of retained variables
+        // -> generate templateId with bits at varsIntroduce positions
         for (long i = 0, a = 0; i < varsIntroduce.count && a < varsForget.count; i++) {
             if (varsIntroduce.vars[i] == varsForget.vars[a]) {
                 templateId = templateId | (((id >> a) & 1) << i);
@@ -415,7 +436,9 @@ __global__ void solveIntroduceForget(
 
         // iterate though all corresponding edge solutions
         for (long i = 0; i < combinations; i++) {
+            // Other ID: ID containing all variables of the current node.
             long b = 0, otherId = templateId;
+            // Add back remaining introduce vars into otherId
             for (long a = 0; a < varsIntroduce.count; a++) {
                 if (b >= varsForget.count || varsIntroduce.vars[a] != varsForget.vars[b]) {
                     otherId = otherId | (((i >> (a - b)) & 1) << a);
@@ -423,12 +446,29 @@ __global__ void solveIntroduceForget(
                     b++;
                 }
             }
-            tmp += solveIntroduceF(clauses, numclauses, varsIntroduce, solsE, lastVars, weights, otherId);
+            tmp += solveIntroduceF(clauses, numclauses, varsIntroduce, solsE, lastVars, edge_masks, weights, otherId);
         }
-        
+
+        uint64_t abs_id = abs(id);
+        uint64_t id_class = (abs_id & (~masks.introduced_always_neg));
+        if ((masks.introduced_always_neg > 0)) {
+            //printf("result %f class: %ld, other: %ld\n", tmp, id_class, id);
+        }
+   
         if (tmp > 0) {
-            double last = solsF->solutionCountFor(id);
+            double last = solsF->solutionCountFor(id, masks);
             last = max(last, 0.0);
+            uint64_t id_class = (abs(id) & ~(masks.introduced_always_neg));
+            int64_t assignment = 0;
+            for (long i = 0, a = 0; i < varsIntroduce.count && a < varsForget.count; i++) {
+                if (varsIntroduce.vars[i] == varsForget.vars[a]) {
+                    assignment = assignment | (((id >> a) & 1) << i);
+                    a++;
+                }
+            }
+            if (checkBag(clauses, numclauses, assignment, varsIntroduce)) {
+                id = id_class;
+            }
             if (!cfg.no_exponent)  {
                 solsF->setCount(id, (tmp / value + last));
                 atomicMax(exponent, ilogb((tmp / value + last)));
@@ -438,11 +478,12 @@ __global__ void solveIntroduceForget(
             }
             solsF->setSatisfiability(true);
         }
+        //printf("class: %ld val: %f\n", (abs(id) | masks.introduced_always_neg), tmp);
     } else {
         // no forget variables, only introduce
-        double tmp = solveIntroduceF(clauses, numclauses, varsIntroduce, solsE, lastVars, weights, id);
+        double tmp = solveIntroduceF(clauses, numclauses, varsIntroduce, solsE, lastVars, edge_masks, weights, id);
         if (tmp > 0) {
-            double last = solsF->solutionCountFor(id);
+            double last = solsF->solutionCountFor(id, masks);
             last = max(last, 0.0);
             if (!cfg.no_exponent)  {
                 solsF->setCount(id, (tmp / value + last));
@@ -477,7 +518,8 @@ std::unique_ptr<T<GpuOnly>, CudaMem> gpuClone(const T<CudaMem>& owner) {
 
 TreeSolution<CudaMem> combineTreeWrapper(
     TreeSolution<CudaMem>& to_owner,
-    const TreeSolution<CudaMem>& from_owner
+    const TreeSolution<CudaMem>& from_owner,
+    BagMasks masks
 ) {
     auto to_gpu = gpuClone(to_owner);
     auto from_gpu = gpuClone(from_owner);
@@ -485,7 +527,7 @@ TreeSolution<CudaMem> combineTreeWrapper(
     int64_t threadsPerBlock = 512;
     int64_t threads = from_owner.maxId() - from_owner.minId();
     int64_t blocksPerGrid = (threads + threadsPerBlock - 1) / threadsPerBlock;
-    combineTree<<<blocksPerGrid, threadsPerBlock>>>(to_gpu.get(), from_gpu.get());
+    combineTree<<<blocksPerGrid, threadsPerBlock>>>(to_gpu.get(), from_gpu.get(), masks);
     gpuErrchk(cudaDeviceSynchronize());
     update(to_owner, to_gpu);
     return std::move(to_owner);
@@ -498,6 +540,9 @@ void solveJoinWrapper(
     GPUVars variables,
     GPUVars edgeVariables1,
     GPUVars edgeVariables2,
+    BagMasks masks,
+    BagMasks e1_masks,
+    BagMasks e2_masks,
     double *weights,
     double value,
     int32_t *exponent,
@@ -523,6 +568,9 @@ void solveJoinWrapper(
                     variables,
                     edgeVariables1,
                     edgeVariables2,
+                    masks,
+                    e1_masks,
+                    e2_masks,
                     weights,
                     value, 
                     exponent,
@@ -546,6 +594,9 @@ void solveJoinWrapper(
                         variables,
                         edgeVariables1,
                         edgeVariables2,
+                        masks,
+                        e1_masks,
+                        e2_masks,
                         weights,
                         value, 
                         exponent,
@@ -577,6 +628,8 @@ void introduceForgetWrapper(
     // FIXME: Move this static information to GPU once.
     uint64_t *clauses,
     long numclauses,
+    BagMasks masks,
+    BagMasks edge_masks,
     double *weights,
     int32_t *exponent,
     double previous_value,
@@ -601,6 +654,8 @@ void introduceForgetWrapper(
                 varsIntroduce,
                 clauses,
                 numclauses,
+                masks,
+                edge_masks,
                 weights,
                 exponent, 
                 previous_value,
@@ -619,6 +674,8 @@ void introduceForgetWrapper(
                     varsIntroduce,
                     clauses,
                     numclauses,
+                    masks,
+                    edge_masks,
                     weights,
                     exponent, 
                     previous_value,

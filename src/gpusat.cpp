@@ -12,10 +12,10 @@ namespace gpusat {
     template<class... Ts> sum_visitor(Ts...) -> sum_visitor<Ts...>;
 
     template<class T>
-    static boost::multiprecision::cpp_bin_float_100 solutionSum(T& sol) {
+    static boost::multiprecision::cpp_bin_float_100 solutionSum(T& sol, BagType& bag) {
         boost::multiprecision::cpp_bin_float_100 sols = 0.0;
         for (size_t i = sol.minId(); i < sol.maxId(); i++) {
-            sols = sols + std::max(sol.solutionCountFor(i), 0.0);
+            sols = sols + std::max(sol.solutionCountFor(i, bag.masks), 0.0);
         }
         return sols;
     }
@@ -23,7 +23,7 @@ namespace gpusat {
     static boost::multiprecision::cpp_bin_float_100 bag_sum(BagType& bag) {
         boost::multiprecision::cpp_bin_float_100 sols = 0.0;
         for (auto& solution : bag.solution) {
-            sols = sols + std::visit([](auto& sol) { return solutionSum(sol); }, solution);
+            sols = sols + std::visit([&bag](auto& sol) { return solutionSum(sol, bag); }, solution);
         }
         return sols;
     }
