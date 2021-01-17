@@ -396,7 +396,12 @@ __global__ void solveJoin(
         // no solutions stored yet, but some present in edge
         if (oldVal < 0.0) {
             if (edge_value > 0.0) {
-                solution->setSatisfiability(true);
+                solution->incSolutions();
+            }
+        // no solution present in edge, but some solution was stored
+        } else if (oldVal > 0.0) {
+            if (edge_value == 0.0) {
+                solution->decSolutions();
             }
         }
 
@@ -412,7 +417,7 @@ __global__ void solveJoin(
     };
 
     if (edge1_solutions > 0.0 && edge2_solutions > 0.0) {
-        solution->setSatisfiability(true);
+        solution->incSolutions();
 
         // we do not need to consider the old solution
         // count in this bag, because each id can only occur
@@ -600,7 +605,10 @@ __global__ void solveIntroduceForget(
             } else {
                 solsF->setCount(id, (tmp + last));
             }
-            solsF->setSatisfiability(true);
+            //if (auto array = std::get_if<ArraySolution>(&solsF)) {
+            // count solution (no-op except for ArraySolution)
+            solsF->incSolutions();
+            //}
         }
     } else {
         // no forget variables, only introduce
@@ -614,7 +622,10 @@ __global__ void solveIntroduceForget(
             } else {
                 solsF->setCount(id, (tmp + last));
             }
-            solsF->setSatisfiability(true);
+            //if (auto array = std::get_if<ArraySolution>(&solsF)) {
+            // count solution (no-op except for ArraySolution)
+            solsF->incSolutions();
+            //}
         }
     } 
 }
