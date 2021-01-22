@@ -21,6 +21,14 @@ __device__ uint64_t atomicAdd(uint64_t* address, uint64_t val)
     return (uint64_t)atomicAdd_system(addr, (unsigned long long)val);
 }
 
+__device__ uint64_t atomicSub(uint64_t* address, int val)
+{
+    //static_assert(sizeof(int64_t) == sizeof(long long));
+    //FIXME: unsafe, assumes < 32bit
+    auto addr = (int*)address;
+    return (uint64_t)atomicSub_system(addr, val);
+}
+
 __device__ int64_t atomicMax(int64_t* address, int64_t val)
 {
     static_assert(sizeof(int64_t) == sizeof(long long));

@@ -52,7 +52,7 @@ namespace gpusat {
 
 #if defined(__CUDACC__)
     extern __device__ uint64_t atomicAdd(uint64_t* address, uint64_t val);
-    extern __device__ uint64_t atomicSub(uint64_t* address, uint64_t val);
+    extern __device__ uint64_t atomicSub(uint64_t* address, int val);
 #endif
 
     struct TreeNode {
