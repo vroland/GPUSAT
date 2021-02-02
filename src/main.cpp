@@ -175,7 +175,7 @@ int main(int argc, char *argv[]) {
         solutionType = dataStructure::ARRAY;
     } else if (type == "tree") {
         solutionType = dataStructure::TREE;
-    } else if (type == "combined") {
+    } else if (type == "combined" || type == "") {
         if (treeDecomp.width < 30) {
             solve_mode = solve_mode | SolveMode::ARRAY_TYPE;
             solutionType = dataStructure::ARRAY;

@@ -372,15 +372,33 @@ __global__ void solveJoin(
     }
 
     double solution_value = -1.0;
-    auto only_one_edge_has_solution = [&](double edge_value, double oldVal) {
+    // do both edges have an entry for edge1 and edge2?
+    if (edge1_solutions >= 0.0 && edge2_solutions >= 0.0) {
+        if (edge1_solutions > 0.0 && edge2_solutions > 0.0) {
+            solution->incSolutions();
+
+            // we do not need to consider the old solution
+            // count in this bag, because each id can only occur
+            // in an edge node once, and here the id occurs for both edges.
+
+            solution_value = edge1_solutions * edge2_solutions / weight;
+            //atomicAdd(sols, 1);
+            if (!(run.mode & NO_EXP)) {
+                solution_value /= value;
+            }
+            solution->setCount(id, solution_value);
+        }
+    // we have some solutions in edge1
+    } else if (edge1_solutions >= 0.0) {
+        double oldVal = solution->solutionCountFor(id); 
         // no solutions stored yet, but some present in edge
         if (oldVal < 0.0) {
-            if (edge_value > 0.0) {
+            if (edge1_solutions > 0.0) {
                 solution->incSolutions();
             }
         // no solution present in edge, but some solution was stored
         } else if (oldVal > 0.0) {
-            if (edge_value == 0.0) {
+            if (edge1_solutions == 0.0) {
                 solution->decSolutions();
             }
         }
@@ -390,42 +408,39 @@ __global__ void solveJoin(
             oldVal = 1.0;
         }
 
-        solution_value = edge_value * oldVal / weight;
-        if (!(run.mode & NO_EXP)) {
-            solution_value /= value;
-        }
-    };
+        double solution_value = edge1_solutions * oldVal / weight;
+        solution->setCount(id, solution_value);
 
-    if (edge1_solutions > 0.0 && edge2_solutions > 0.0) {
-        solution->incSolutions();
-
-        // we do not need to consider the old solution
-        // count in this bag, because each id can only occur
-        // in an edge node once, and here the id occurs for both edges.
-
-        solution_value = edge1_solutions * edge2_solutions / weight;
-        //atomicAdd(sols, 1);
-        if (!(run.mode & NO_EXP)) {
-            solution_value /= value;
-        }
-    // we need to consider individual edges and maybe look
-    // at we have already stored for the current id.
-    } else {
+    } else if (edge2_solutions >= 0.0) {
         double oldVal = solution->solutionCountFor(id); 
-        // only one edge has a solution, the other has none.
-        if (edge1_solutions >= 0.0 && edge2_solutions < 0.0) {
-            only_one_edge_has_solution(edge1_solutions, oldVal);
-        } else if (edge1_solutions < 0.0 && edge2_solutions >= 0.0) {
-            only_one_edge_has_solution(edge2_solutions, oldVal);
+        // no solutions stored yet, but some present in edge
+        if (oldVal < 0.0) {
+            if (edge2_solutions > 0.0) {
+                solution->incSolutions();
+            }
+        // no solution present in edge, but some solution was stored
+        } else if (oldVal > 0.0) {
+            if (edge2_solutions == 0.0) {
+                solution->decSolutions();
+            }
         }
+
+        // if the solution was not present before, multiply with one.
+        if (oldVal < 0.0) {
+            oldVal = 1.0;
+        }
+
+        solution_value =  edge2_solutions * oldVal / weight;
+        if (!(run.mode & NO_EXP)) {
+            solution_value /= value;
+        }
+        solution->setCount(id, solution_value);
+    } else {
+        printf("id: %ld, %f %f\n", id, edge1_solutions, edge2_solutions);
     }
 
-    // if we found solutions, store them
-    if (solution_value > 0.0) {
-        solution->setCount(id, solution_value);
-        if (!(run.mode & NO_EXP)) {
-            atomicMax(exponent, ilogb(solution_value));
-        }
+    if (!(run.mode & NO_EXP) && solution_value > 0.0) {
+        atomicMax(exponent, ilogb(solution_value));
     }
 }
 
@@ -873,4 +888,13 @@ T<CudaMem> gpuOwner(const T<CpuMem>& orig, size_t reserve) {
     return std::move(gpu);
 }
 
+    // Explicitly instantiate for all datastructures
+    // To ensure the compiler does not optimize them out.
+    template ArraySolution<CpuMem> cpuCopy(const ArraySolution<CudaMem>&, size_t);
+    template TreeSolution<CpuMem> cpuCopy(const TreeSolution<CudaMem>&, size_t);
+
+       // Explicitly instantiate for all datastructures
+    // To ensure the compiler does not optimize them out.
+    template ArraySolution<CudaMem> gpuOwner(const ArraySolution<CpuMem>&, size_t);
+    template TreeSolution<CudaMem> gpuOwner(const TreeSolution<CpuMem>&, size_t);
 }
