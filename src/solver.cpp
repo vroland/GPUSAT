@@ -281,7 +281,7 @@ namespace gpusat {
     }
 
     void Solver::solveJoin(BagType &node, BagType &edge1, BagType &edge2, satformulaType &formula, nodeType nextNode) {
-        std::cerr << "join input: " << std::endl;
+        //std::cerr << "join input: " << std::endl;
         //std::cerr << node.hash() << std::endl;
         //std::cerr << " " << edge1.hash() << " id: " << edge1.id << std::endl;
         //std::cerr << " " << edge2.hash() << " id: " << edge2.id << std::endl;

@@ -435,9 +435,7 @@ __global__ void solveJoin(
             solution_value /= value;
         }
         solution->setCount(id, solution_value);
-    } else {
-        printf("id: %ld, %f %f\n", id, edge1_solutions, edge2_solutions);
-    }
+    } 
 
     if (!(run.mode & NO_EXP) && solution_value > 0.0) {
         atomicMax(exponent, ilogb(solution_value));
