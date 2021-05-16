@@ -228,7 +228,7 @@ __device__ double solveIntroduce_(
     }
 
     if (edge.hasData() && otherId >= edge.minId() && otherId < edge.maxId()) {
-        return edge.solutionCountFor(otherId) * weight; 
+        return max(edge.solutionCountFor(otherId) * weight, 0.0); 
     } else if (!edge.hasData() && otherId >= edge.minId() && otherId < edge.maxId()) {
         return 0.0;
     } else {
@@ -592,6 +592,7 @@ __global__ void solveIntroduceForget(
         
         if (tmp > 0) {
             double last = solsF->solutionCountFor(id);
+            last = max(last, 0.0);
             if (!(run.mode & NO_EXP))  {
                 solsF->setCount(id, (tmp / value + last));
                 atomicMax(exponent, ilogb((tmp / value + last)));
@@ -608,6 +609,7 @@ __global__ void solveIntroduceForget(
         double tmp = solveIntroduceF(clauses, numVarsC, numclauses, varsIntroduce, solsE, lastVars, weights, id, run.mode);
         if (tmp > 0) {
             double last = solsF->solutionCountFor(id);
+            last = max(last, 0.0);
             if (!(run.mode & NO_EXP))  {
                 solsF->setCount(id, (tmp / value + last));
                 atomicMax(exponent, ilogb((tmp / value + last)));
@@ -719,7 +721,7 @@ void solveJoinWrapper(
 
     auto solution_gpu = gpuClone(solution);
 
-    auto single_edge_join = [&](SolutionVariant* edge) {
+    auto single_edge_join1 = [&](SolutionVariant* edge) {
         assert(edge != nullptr);
         std::visit([&](auto &sol) {
             auto edge_owner = gpuOwner(sol);
@@ -729,6 +731,28 @@ void solveJoinWrapper(
                 solution_gpu.get(),
                 edge_gpu.get(),
                 (decltype(edge_owner)*)nullptr,
+                variables,
+                edgeVariables1,
+                edgeVariables2,
+                weights,
+                value, 
+                exponent,
+                meta
+            );
+        }, *edge);
+        gpuErrchk(cudaDeviceSynchronize());
+    };
+
+    auto single_edge_join2 = [&](SolutionVariant* edge) {
+        assert(edge != nullptr);
+        std::visit([&](auto &sol) {
+            auto edge_owner = gpuOwner(sol);
+            auto edge_gpu = gpuClone(edge_owner);
+
+            solveJoin<<<blocksPerGrid, threadsPerBlock>>>(
+                solution_gpu.get(),
+                (decltype(edge_owner)*)nullptr,
+                edge_gpu.get(),
                 variables,
                 edgeVariables1,
                 edgeVariables2,
@@ -770,9 +794,9 @@ void solveJoinWrapper(
     };
 
     if (edge1.has_value() && !edge2.has_value()) {
-        single_edge_join(edge1.value());
+        single_edge_join1(edge1.value());
     } else if (!edge1.has_value() && edge2.has_value()) {
-        single_edge_join(edge2.value());
+        single_edge_join2(edge2.value());
     } else {
         assert(edge1.has_value() && edge2.has_value());
         double_edge_join(edge1.value(), edge2.value());

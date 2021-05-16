@@ -185,7 +185,7 @@ namespace gpusat {
             }
 
             constexpr double initializer() const {
-                return 0.0;
+                return -1.0;
             }
 
             size_t hash() const {
@@ -203,7 +203,11 @@ namespace gpusat {
             }
 
             GPU_HOST_ATTR double solutionCountFor(int64_t id) const {
-                return data()[id - minId_];
+                if (id - minId_ < dataStructureSize()) {
+                    return data()[id - minId_];
+                } else {
+                    return -1.0;
+                }
             }
 
             /**

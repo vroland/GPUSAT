@@ -338,22 +338,23 @@ namespace gpusat {
             //std::cout << "run: " << run << " " << tmp_solution.minId() << " " << tmp_solution.maxId() << std::endl;
 
             auto solution_gpu = gpuOwner(tmp_solution);
-            //std::cerr << "e1s " << edge1.solution.size() << " e2s " << edge2.solution.size() << std::endl;
+            //std::cerr << "e1s " << edge1.id << " " << edge1.solution.size() << " e2s " << edge2.id << " " << edge2.solution.size() << std::endl;
 
             for (int64_t b = 0; b < std::max(edge1.solution.size(), edge2.solution.size()); b++) {
+                //std::cout << dataStructureSize(edge1.solution[b]) << " " << std::get<ArraySolution<CpuMem>>(edge1.solution[b]).minId() << " " << std::get<ArraySolution<CpuMem>>(edge1.solution[b]).maxId() << std::endl;
 
                 std::optional<SolutionVariant*> edge1_solution = std::nullopt;
-                if (b < edge1.solution.size() && hasData(edge1.solution[b])) {
+                if (b < edge1.solution.size()) {
                     edge1_solution = &edge1.solution[b];
                 }
 
                 std::optional<SolutionVariant*> edge2_solution = std::nullopt;
-                if (b < edge2.solution.size() && hasData(edge2.solution[b])) {
+                if (b < edge2.solution.size()) {
                     edge2_solution = &edge2.solution[b];
                 }
 
                  //std::cerr << "thread offset: " << minId << " threads " << maxId - minId << std::endl;
-                 //std::cerr << "edge1: " << hasData(edge1.solution[b]) << " edge2 " << hasData(edge2.solution[b]) << std::endl;
+                 //std::cerr << "edge1: " << edge1_solution.has_value() << " edge2 " << edge2_solution.has_value() << std::endl;
                 RunMeta meta = {
                     .minId = minId,
                     .maxId = maxId,
@@ -727,7 +728,7 @@ namespace gpusat {
         for (const auto &sol : node.solution) {
             tableSize += dataStructureSize(sol);
         }
-        //std::cout << "table size: " << tableSize << std::endl;
+        //std::cout << "solution sets: " << node.id << " "<< node.solution.size() << std::endl;
         //std::cerr << "IF output hash: " << node.hash() << std::endl;
         //std::cerr << "IF first bag data: " << hasData(node.solution[0]) << std::endl;
 
